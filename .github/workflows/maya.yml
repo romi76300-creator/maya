@@ -1,0 +1,1657 @@
+name: Build Maya APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Write Maya project files
+        run: |
+          mkdir -p "$(dirname 'settings.gradle')"
+          cat > 'settings.gradle' <<'MAYA_EOF_0'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Maya"
+          include ':app'
+          MAYA_EOF_0
+          mkdir -p "$(dirname 'build.gradle')"
+          cat > 'build.gradle' <<'MAYA_EOF_1'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          MAYA_EOF_1
+          mkdir -p "$(dirname 'gradle.properties')"
+          cat > 'gradle.properties' <<'MAYA_EOF_2'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          MAYA_EOF_2
+          mkdir -p "$(dirname 'app/build.gradle')"
+          cat > 'app/build.gradle' <<'MAYA_EOF_3'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.ankit.maya'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.ankit.maya"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+                  ndk {
+                      abiFilters 'arm64-v8a'
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+
+          dependencies {
+              implementation 'net.java.dev.jna:jna:5.13.0@aar'
+              implementation 'com.alphacephei:vosk-android:0.3.47'
+          }
+          MAYA_EOF_3
+          mkdir -p "$(dirname 'app/src/main/AndroidManifest.xml')"
+          cat > 'app/src/main/AndroidManifest.xml' <<'MAYA_EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.SEND_SMS" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+                  <intent>
+                      <action android:name="android.speech.RecognitionService" />
+                  </intent>
+                  <intent>
+                      <action android:name="android.intent.action.TTS_SERVICE" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="Maya"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name=".SetupActivity"
+                      android:exported="false" />
+
+                  <service
+                      android:name=".MayaService"
+                      android:exported="false"
+                      android:foregroundServiceType="microphone" />
+
+                  <receiver
+                      android:name=".AdminReceiver"
+                      android:exported="true"
+                      android:permission="android.permission.BIND_DEVICE_ADMIN">
+                      <meta-data
+                          android:name="android.app.device_admin"
+                          android:resource="@xml/device_admin" />
+                      <intent-filter>
+                          <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          MAYA_EOF_4
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/Actions.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/Actions.kt' <<'MAYA_EOF_5'
+          package com.ankit.maya
+
+          import android.Manifest
+          import android.app.admin.DevicePolicyManager
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.hardware.camera2.CameraCharacteristics
+          import android.hardware.camera2.CameraManager
+          import android.media.AudioManager
+          import android.net.Uri
+          import android.os.Build
+          import android.provider.ContactsContract
+          import android.telephony.SmsManager
+
+          object Actions {
+
+              /** Runs the action. Returns an extra sentence to speak if something failed, otherwise null. */
+              fun run(ctx: Context, r: Brain.Reply): String? {
+                  return try {
+                      when (r.action) {
+                          "open_app" -> openApp(ctx, r.args.optString("app"))
+                          "call" -> call(ctx, r.args.optString("contact"))
+                          "sms" -> sms(ctx, r.args.optString("contact"), r.args.optString("text"))
+                          "whatsapp" -> whatsapp(ctx, r.args.optString("contact"), r.args.optString("text"))
+                          "lock" -> lock(ctx)
+                          "flashlight" -> flashlight(ctx, r.args.optBoolean("on", true))
+                          "volume" -> volume(ctx, r.args.optString("dir"))
+                          "search" -> view(ctx, "https://www.google.com/search?q=" + Uri.encode(r.args.optString("query")))
+                          "youtube" -> view(ctx, "https://www.youtube.com/results?search_query=" + Uri.encode(r.args.optString("query")))
+                          else -> null
+                      }
+                  } catch (e: Exception) {
+                      "Jaan, ye kaam nahi ho paya."
+                  }
+              }
+
+              private fun has(ctx: Context, perm: String): Boolean =
+                  ctx.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+
+              private fun newTask(i: Intent): Intent {
+                  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                  return i
+              }
+
+              private fun view(ctx: Context, url: String): String? {
+                  ctx.startActivity(newTask(Intent(Intent.ACTION_VIEW, Uri.parse(url))))
+                  return null
+              }
+
+              private fun openApp(ctx: Context, name: String): String? {
+                  val q = name.trim().lowercase()
+                  if (q.isEmpty()) return null
+                  val pm = ctx.packageManager
+                  val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                  val apps = pm.queryIntentActivities(main, 0)
+                  val hit = apps.firstOrNull { it.loadLabel(pm).toString().lowercase() == q }
+                      ?: apps.firstOrNull { it.loadLabel(pm).toString().lowercase().contains(q) }
+                      ?: return "Jaan, " + name + " naam ka app mujhe mila nahi."
+                  val i = pm.getLaunchIntentForPackage(hit.activityInfo.packageName)
+                      ?: return "Ye app khul nahi raha jaan."
+                  ctx.startActivity(newTask(i))
+                  return null
+              }
+
+              private fun findNumber(ctx: Context, name: String): String? {
+                  if (!has(ctx, Manifest.permission.READ_CONTACTS)) return null
+                  val q = name.trim().lowercase()
+                  if (q.isEmpty()) return null
+                  val cur = ctx.contentResolver.query(
+                      ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                      arrayOf(
+                          ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                          ContactsContract.CommonDataKinds.Phone.NUMBER
+                      ),
+                      null, null, null
+                  ) ?: return null
+                  var exact: String? = null
+                  var part: String? = null
+                  cur.use {
+                      while (it.moveToNext()) {
+                          val n = (it.getString(0) ?: "").lowercase()
+                          val num = it.getString(1) ?: continue
+                          if (n == q) {
+                              if (exact == null) exact = num
+                          } else if (n.contains(q)) {
+                              if (part == null) part = num
+                          }
+                      }
+                  }
+                  return exact ?: part
+              }
+
+              private fun waNumber(raw: String): String {
+                  var d = raw.filter { it.isDigit() }
+                  if (d.length == 11 && d.startsWith("0")) d = d.substring(1)
+                  if (d.length == 10) d = "91" + d
+                  return d
+              }
+
+              private fun call(ctx: Context, who: String): String? {
+                  if (!has(ctx, Manifest.permission.CALL_PHONE)) return "Jaan, call ki permission Setup mein de do."
+                  val num = findNumber(ctx, who) ?: return who + " naam ka contact mujhe nahi mila jaan."
+                  ctx.startActivity(newTask(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(num)))))
+                  return null
+              }
+
+              private fun sms(ctx: Context, who: String, text: String): String? {
+                  if (!has(ctx, Manifest.permission.SEND_SMS)) return "Jaan, SMS ki permission Setup mein de do."
+                  val num = findNumber(ctx, who) ?: return who + " naam ka contact mujhe nahi mila jaan."
+                  val sm: SmsManager = if (Build.VERSION.SDK_INT >= 31) {
+                      ctx.getSystemService(SmsManager::class.java)
+                  } else {
+                      @Suppress("DEPRECATION")
+                      SmsManager.getDefault()
+                  }
+                  sm.sendMultipartTextMessage(num, null, sm.divideMessage(text), null, null)
+                  return null
+              }
+
+              private fun whatsapp(ctx: Context, who: String, text: String): String? {
+                  val num = findNumber(ctx, who) ?: return who + " naam ka contact mujhe nahi mila jaan."
+                  val i = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + waNumber(num) + "?text=" + Uri.encode(text)))
+                  i.setPackage("com.whatsapp")
+                  ctx.startActivity(newTask(i))
+                  return null
+              }
+
+              private fun lock(ctx: Context): String? {
+                  val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                  val admin = ComponentName(ctx, AdminReceiver::class.java)
+                  if (!dpm.isAdminActive(admin)) return "Jaan, pehle Setup mein Device Admin on kar do, phir lock kar paungi."
+                  dpm.lockNow()
+                  return null
+              }
+
+              private fun flashlight(ctx: Context, on: Boolean): String? {
+                  val cm = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                  val id = cm.cameraIdList.firstOrNull {
+                      cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                  } ?: return "Is phone mein flash mila nahi jaan."
+                  cm.setTorchMode(id, on)
+                  return null
+              }
+
+              private fun volume(ctx: Context, dir: String): String? {
+                  val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                  when (dir) {
+                      "up" -> repeat(3) {
+                          am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                      }
+                      "down" -> repeat(3) {
+                          am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                      }
+                      "mute" -> am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
+                  }
+                  return null
+              }
+          }
+          MAYA_EOF_5
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/AdminReceiver.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/AdminReceiver.kt' <<'MAYA_EOF_6'
+          package com.ankit.maya
+
+          import android.app.admin.DeviceAdminReceiver
+
+          class AdminReceiver : DeviceAdminReceiver()
+          MAYA_EOF_6
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/Brain.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/Brain.kt' <<'MAYA_EOF_7'
+          package com.ankit.maya
+
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.os.BatteryManager
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+
+          object Net {
+              fun post(url: String, key: String, body: String): Pair<Int, String> {
+                  val conn = URL(url).openConnection() as HttpURLConnection
+                  try {
+                      conn.requestMethod = "POST"
+                      conn.connectTimeout = 15000
+                      conn.readTimeout = 45000
+                      conn.doOutput = true
+                      conn.setRequestProperty("Content-Type", "application/json")
+                      conn.setRequestProperty("x-goog-api-key", key)
+                      conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                      val code = conn.responseCode
+                      val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                      val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                      return Pair(code, text)
+                  } finally {
+                      conn.disconnect()
+                  }
+              }
+          }
+
+          object Brain {
+
+              class Reply(val speech: String, val action: String, val args: JSONObject)
+
+              private val MODELS = arrayOf("gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash")
+              private val history = ArrayList<Pair<String, String>>()
+
+              private fun deviceStatus(ctx: Context): String {
+                  val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                  val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                  val i: Intent? = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                  val st = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                  val charging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+                  val time = SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.ENGLISH).format(Date())
+                  return "DEVICE STATUS: battery " + level + " percent, " +
+                      (if (charging) "charging" else "not charging") + ", now " + time + "."
+              }
+
+              private fun system(owner: String): String {
+                  return """You are MAYA, a sweet, warm, playful young woman who lives inside the Android phone of your owner $owner. $owner is the only person you obey, and $owner created you. If anyone asks who made you or who created you, say that $owner made you.
+          Always talk in natural Hinglish (Hindi mixed with simple English) written in Roman letters, like a caring close friend. Keep every reply very short: one or two sentences, because it is spoken aloud. Sometimes call $owner "jaan", not in every reply. Never use emojis, markdown, asterisks or lists.
+          At the start of each user message there is a DEVICE STATUS line. Use it for battery, charging and time questions. Never invent those facts.
+          You can control the phone. Reply with ONLY a JSON object and no other text:
+          {"speech":"what you say aloud","action":"none","args":{}}
+          Allowed actions and their args:
+          open_app {"app":"app name as written on the phone, for example WhatsApp, YouTube, Camera, Settings"}
+          call {"contact":"name"}
+          sms {"contact":"name","text":"message"}
+          whatsapp {"contact":"name","text":"message"}
+          lock {}
+          flashlight {"on":true}
+          volume {"dir":"up"}   (dir is up, down or mute)
+          search {"query":"text"}
+          youtube {"query":"text"}
+          For normal chat or questions use action none. When you do an action, say in speech what you are doing, in a sweet short way."""
+              }
+
+              fun ask(ctx: Context, text: String): Reply {
+                  val key = Prefs.key(ctx)
+                  if (key.isEmpty()) return Reply("Jaan, pehle Setup mein apni Gemini key daalo.", "none", JSONObject())
+                  val owner = Prefs.owner(ctx)
+
+                  val contents = JSONArray()
+                  for ((role, t) in history) {
+                      contents.put(
+                          JSONObject().put("role", role)
+                              .put("parts", JSONArray().put(JSONObject().put("text", t)))
+                      )
+                  }
+                  contents.put(
+                      JSONObject().put("role", "user")
+                          .put("parts", JSONArray().put(JSONObject().put("text", deviceStatus(ctx) + "\n" + owner + " says: " + text)))
+                  )
+
+                  val body = JSONObject()
+                      .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system(owner)))))
+                      .put("contents", contents)
+                      .put("generationConfig", JSONObject().put("temperature", 0.9).put("responseMimeType", "application/json"))
+                      .toString()
+
+                  var lastCode = 0
+                  for (m in MODELS) {
+                      try {
+                          val (code, resp) = Net.post(
+                              "https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", key, body
+                          )
+                          lastCode = code
+                          if (code == 200) {
+                              val r = parse(resp)
+                              history.add(Pair("user", text))
+                              history.add(Pair("model", r.speech))
+                              while (history.size > 12) history.removeAt(0)
+                              return r
+                          }
+                          if (code == 400 || code == 401 || code == 403) break
+                          if (code == 429) break
+                      } catch (e: Exception) {
+                          lastCode = -1
+                      }
+                  }
+                  return when (lastCode) {
+                      400, 401, 403 -> Reply("Jaan, Gemini key accept nahi hui. Setup mein key dobara paste karo.", "none", JSONObject())
+                      429 -> Reply("Jaan, abhi thodi limit ho gayi hai. Ek minute baad dobara bolo.", "none", JSONObject())
+                      -1 -> Reply("Jaan, internet nahi chal raha lagta hai.", "none", JSONObject())
+                      else -> Reply("Jaan, abhi mera dimaag thoda atak gaya. Dobara bolo na.", "none", JSONObject())
+                  }
+              }
+
+              private fun parse(resp: String): Reply {
+                  var raw = ""
+                  try {
+                      val parts = JSONObject(resp).getJSONArray("candidates").getJSONObject(0)
+                          .getJSONObject("content").getJSONArray("parts")
+                      val sb = StringBuilder()
+                      for (i in 0 until parts.length()) sb.append(parts.getJSONObject(i).optString("text", ""))
+                      raw = sb.toString().trim()
+                      var s = raw
+                      if (s.startsWith("```")) {
+                          s = s.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                      }
+                      val o = JSONObject(s)
+                      return Reply(
+                          o.optString("speech", "").ifEmpty { "Ji jaan?" },
+                          o.optString("action", "none"),
+                          o.optJSONObject("args") ?: JSONObject()
+                      )
+                  } catch (e: Exception) {
+                      val fallback = if (raw.isNotEmpty() && !raw.startsWith("{")) raw else "Ji jaan?"
+                      return Reply(fallback, "none", JSONObject())
+                  }
+              }
+          }
+          MAYA_EOF_7
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/MainActivity.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/MainActivity.kt' <<'MAYA_EOF_8'
+          package com.ankit.maya
+
+          import android.Manifest
+          import android.app.Activity
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.Gravity
+          import android.view.inputmethod.InputMethodManager
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var status: TextView
+              private lateinit var heard: TextView
+              private lateinit var reply: TextView
+              private lateinit var input: EditText
+              private val h = Handler(Looper.getMainLooper())
+              private var askedSetup = false
+
+              private val tick = object : Runnable {
+                  override fun run() {
+                      status.text = MayaState.status
+                      heard.text = if (MayaState.heard.isEmpty()) "" else "Aap: " + MayaState.heard
+                      reply.text = MayaState.reply
+                      h.postDelayed(this, 400)
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = Ui.BG
+                  window.navigationBarColor = Ui.BG
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Ui.BG)
+                  root.setPadding(Ui.dp(this, 16), Ui.dp(this, 36), Ui.dp(this, 16), Ui.dp(this, 16))
+
+                  val top = LinearLayout(this)
+                  top.orientation = LinearLayout.HORIZONTAL
+                  top.gravity = Gravity.CENTER_VERTICAL
+                  val title = Ui.label(this, "M.A.Y.A", 20f, Color.WHITE, true)
+                  top.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                  top.addView(Ui.button(this, "Setup", Ui.CARD) {
+                      startActivity(Intent(this, SetupActivity::class.java))
+                  })
+                  root.addView(top)
+
+                  val orb = OrbView(this)
+                  orb.setOnClickListener { send(MayaService.ACTION_LISTEN, null) }
+                  root.addView(orb, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+                  val sub = Ui.label(this, "ADVANCED NEURAL PROCESSING SYSTEM", 11f, Ui.MUTED, false)
+                  sub.gravity = Gravity.CENTER
+                  sub.letterSpacing = 0.2f
+                  root.addView(sub, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                  status = Ui.label(this, "", 14f, Ui.ORANGE, true)
+                  status.gravity = Gravity.CENTER
+                  status.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 4))
+                  root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                  heard = Ui.label(this, "", 13f, Ui.MUTED, false)
+                  heard.gravity = Gravity.CENTER
+                  heard.maxLines = 2
+                  root.addView(heard, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                  reply = Ui.label(this, "", 16f, Color.WHITE, false)
+                  reply.gravity = Gravity.CENTER
+                  reply.maxLines = 4
+                  reply.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 10))
+                  root.addView(reply, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  row.gravity = Gravity.CENTER_VERTICAL
+                  input = EditText(this)
+                  input.hint = "Maya se likh kar baat karo..."
+                  input.setHintTextColor(Ui.MUTED)
+                  input.setTextColor(Color.WHITE)
+                  input.background = Ui.round(Ui.CARD, Ui.dp(this, 22).toFloat())
+                  input.setPadding(Ui.dp(this, 16), Ui.dp(this, 10), Ui.dp(this, 16), Ui.dp(this, 10))
+                  input.maxLines = 3
+                  row.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                  val sendBtn = Ui.button(this, "Bhejo", Ui.BLUE) {
+                      val t = input.text.toString().trim()
+                      if (t.isNotEmpty()) {
+                          send(MayaService.ACTION_TEXT, t)
+                          input.setText("")
+                          val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                          imm.hideSoftInputFromWindow(input.windowToken, 0)
+                      }
+                  }
+                  val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  lp.leftMargin = Ui.dp(this, 8)
+                  row.addView(sendBtn, lp)
+                  root.addView(row)
+
+                  setContentView(root)
+              }
+
+              private fun ready(): Boolean {
+                  val mic = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                  return mic && Prefs.key(this).isNotEmpty()
+              }
+
+              private fun send(action: String, text: String?) {
+                  if (!ready()) {
+                      startActivity(Intent(this, SetupActivity::class.java))
+                      return
+                  }
+                  val i = Intent(this, MayaService::class.java).setAction(action)
+                  if (text != null) i.putExtra("text", text)
+                  startForegroundService(i)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  MayaState.appVisible = true
+                  if (ready()) {
+                      startForegroundService(Intent(this, MayaService::class.java))
+                  } else {
+                      MayaState.status = "Pehle Setup karo"
+                      if (!askedSetup) {
+                          askedSetup = true
+                          startActivity(Intent(this, SetupActivity::class.java))
+                      }
+                  }
+                  h.post(tick)
+              }
+
+              override fun onPause() {
+                  super.onPause()
+                  MayaState.appVisible = false
+                  h.removeCallbacks(tick)
+              }
+          }
+          MAYA_EOF_8
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/MayaService.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/MayaService.kt' <<'MAYA_EOF_9'
+          package com.ankit.maya
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.graphics.PixelFormat
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.provider.Settings
+          import android.speech.RecognitionListener
+          import android.speech.RecognizerIntent
+          import android.speech.SpeechRecognizer
+          import android.view.Gravity
+          import android.view.View
+          import android.view.WindowManager
+          import org.vosk.Model
+          import org.vosk.Recognizer
+          import org.vosk.android.SpeechService
+          import java.io.File
+          import java.io.FileOutputStream
+          import java.io.IOException
+          import java.util.concurrent.Executors
+          import org.vosk.android.RecognitionListener as VoskListener
+
+          class MayaService : Service() {
+
+              companion object {
+                  const val ACTION_TEXT = "com.ankit.maya.TEXT"
+                  const val ACTION_LISTEN = "com.ankit.maya.LISTEN"
+                  const val ACTION_STOP = "com.ankit.maya.STOP"
+                  private const val CHANNEL = "maya_channel"
+              }
+
+              private val main = Handler(Looper.getMainLooper())
+              private val worker = Executors.newSingleThreadExecutor()
+              private var model: Model? = null
+              private var wake: SpeechService? = null
+              private var recognizer: SpeechRecognizer? = null
+              private var voice: Voice? = null
+              private var overlay: View? = null
+              @Volatile private var busy = false
+              @Volatile private var alive = true
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  alive = true
+                  if (!goForeground()) {
+                      stopSelf()
+                      return
+                  }
+                  voice = Voice(this)
+                  showOverlay()
+                  main.post(tick)
+                  MayaState.status = "Maya shuru ho rahi hai..."
+                  worker.execute { loadModelAndListen() }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  goForeground()
+                  when (intent?.action) {
+                      ACTION_TEXT -> {
+                          val t = intent?.getStringExtra("text") ?: ""
+                          if (t.isNotBlank() && !busy) {
+                              busy = true
+                              worker.execute {
+                                  stopWake()
+                                  process(t)
+                              }
+                          }
+                      }
+                      ACTION_LISTEN -> main.post { startCommandListening() }
+                      ACTION_STOP -> {
+                          stopSelf()
+                      }
+                  }
+                  return START_STICKY
+              }
+
+              override fun onDestroy() {
+                  alive = false
+                  main.removeCallbacksAndMessages(null)
+                  try { recognizer?.destroy() } catch (e: Exception) { }
+                  stopWake()
+                  try {
+                      overlay?.let { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) }
+                  } catch (e: Exception) { }
+                  overlay = null
+                  voice?.shutdown()
+                  MayaState.mode = Mode.IDLE
+                  MayaState.status = "Maya band hai"
+                  super.onDestroy()
+              }
+
+              // ---------- foreground notification ----------
+
+              private fun goForeground(): Boolean {
+                  return try {
+                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      nm.createNotificationChannel(NotificationChannel(CHANNEL, "Maya", NotificationManager.IMPORTANCE_LOW))
+                      val stop = PendingIntent.getService(
+                          this, 1, Intent(this, MayaService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE
+                      )
+                      val open = PendingIntent.getActivity(
+                          this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+                      )
+                      val n = Notification.Builder(this, CHANNEL)
+                          .setContentTitle("Maya sun rahi hai")
+                          .setContentText("Bolo \"Maya\" aur apni baat kaho")
+                          .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                          .setContentIntent(open)
+                          .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Band karo", stop).build())
+                          .setOngoing(true)
+                          .build()
+                      if (Build.VERSION.SDK_INT >= 29) {
+                          startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                      } else {
+                          startForeground(1, n)
+                      }
+                      true
+                  } catch (e: Exception) {
+                      MayaState.status = "Service error: " + e.message
+                      false
+                  }
+              }
+
+              // ---------- floating orb ----------
+
+              private fun showOverlay() {
+                  try {
+                      if (!Settings.canDrawOverlays(this)) return
+                      val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                      val v = OrbView(this, false)
+                      val d = resources.displayMetrics.density
+                      val size = (110 * d).toInt()
+                      val lp = WindowManager.LayoutParams(
+                          size, size,
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          PixelFormat.TRANSLUCENT
+                      )
+                      lp.gravity = Gravity.TOP or Gravity.END
+                      lp.x = 0
+                      lp.y = (150 * d).toInt()
+                      v.setOnClickListener { startCommandListening() }
+                      wm.addView(v, lp)
+                      overlay = v
+                  } catch (e: Exception) {
+                      overlay = null
+                  }
+              }
+
+              private val tick = object : Runnable {
+                  override fun run() {
+                      if (!alive) return
+                      overlay?.visibility = if (MayaState.appVisible) View.GONE else View.VISIBLE
+                      main.postDelayed(this, 600)
+                  }
+              }
+
+              // ---------- wake word (Vosk, offline) ----------
+
+              private fun copyAssets(path: String, dest: File) {
+                  val list = assets.list(path)
+                  if (list == null || list.isEmpty()) {
+                      dest.parentFile?.mkdirs()
+                      try {
+                          assets.open(path).use { i -> FileOutputStream(dest).use { o -> i.copyTo(o) } }
+                      } catch (e: IOException) {
+                          dest.mkdirs()
+                      }
+                  } else {
+                      dest.mkdirs()
+                      for (f in list) copyAssets(path + "/" + f, File(dest, f))
+                  }
+              }
+
+              private fun loadModelAndListen() {
+                  try {
+                      val dir = File(filesDir, "model")
+                      val marker = File(dir, ".ok")
+                      if (!marker.exists()) {
+                          MayaState.status = "Pehli baar tayyari ho rahi hai (1-2 minute)..."
+                          dir.deleteRecursively()
+                          copyAssets("model-en-us", dir)
+                          marker.writeText("ok")
+                      }
+                      model = Model(dir.absolutePath)
+                      main.post { startWake() }
+                  } catch (e: Exception) {
+                      MayaState.status = "Wake word error: " + e.message + " (orb dabakar baat karo)"
+                  }
+              }
+
+              private val wakeListener = object : VoskListener {
+                  override fun onPartialResult(hypothesis: String?) { look(hypothesis) }
+                  override fun onResult(hypothesis: String?) { look(hypothesis) }
+                  override fun onFinalResult(hypothesis: String?) { look(hypothesis) }
+                  override fun onError(exception: Exception?) {
+                      MayaState.status = "Mic error: " + exception?.message
+                  }
+                  override fun onTimeout() {}
+
+                  private fun look(h: String?) {
+                      if (h == null || busy) return
+                      val s = h.lowercase()
+                      if (s.contains("maya") || s.contains("maia")) {
+                          startCommandListening()
+                      }
+                  }
+              }
+
+              private fun startWake() {
+                  val m = model ?: return
+                  if (busy || !alive) return
+                  try {
+                      stopWake()
+                      val rec = Recognizer(m, 16000.0f, "[\"maya\", \"maia\", \"[unk]\"]")
+                      val ss = SpeechService(rec, 16000.0f)
+                      ss.startListening(wakeListener)
+                      wake = ss
+                      MayaState.mode = Mode.IDLE
+                      MayaState.status = "Bolo \"Maya\"..."
+                  } catch (e: Exception) {
+                      MayaState.status = "Wake start error: " + e.message
+                  }
+              }
+
+              private fun stopWake() {
+                  try {
+                      wake?.stop()
+                      wake?.shutdown()
+                  } catch (e: Exception) { }
+                  wake = null
+              }
+
+              // ---------- command listening (Google speech, Hinglish) ----------
+
+              private fun startCommandListening() {
+                  if (busy) return
+                  if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                      MayaState.status = "Is phone mein speech recognition nahi mila"
+                      return
+                  }
+                  busy = true
+                  MayaState.mode = Mode.LISTENING
+                  MayaState.status = "Sun rahi hoon..."
+                  worker.execute {
+                      stopWake()
+                      try { Thread.sleep(300) } catch (e: InterruptedException) { }
+                      main.post { beginRecognizer() }
+                  }
+              }
+
+              private fun beginRecognizer() {
+                  try {
+                      recognizer?.destroy()
+                      val r = SpeechRecognizer.createSpeechRecognizer(this)
+                      r.setRecognitionListener(cmdListener)
+                      recognizer = r
+                      val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                      i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                      i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+                      i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                      i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                      r.startListening(i)
+                  } catch (e: Exception) {
+                      MayaState.status = "Listen error: " + e.message
+                      finishTurn()
+                  }
+              }
+
+              private val cmdListener = object : RecognitionListener {
+                  override fun onReadyForSpeech(params: Bundle?) {}
+                  override fun onBeginningOfSpeech() {}
+                  override fun onRmsChanged(rmsdB: Float) {}
+                  override fun onBufferReceived(buffer: ByteArray?) {}
+                  override fun onEndOfSpeech() {}
+                  override fun onPartialResults(partialResults: Bundle?) {}
+                  override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                  override fun onError(error: Int) {
+                      MayaState.status = if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                          "Mic permission nahi hai"
+                      } else {
+                          "Kuch sunai nahi diya"
+                      }
+                      finishTurn()
+                  }
+
+                  override fun onResults(results: Bundle?) {
+                      val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                      val text = list?.firstOrNull()
+                      if (text.isNullOrBlank()) {
+                          finishTurn()
+                      } else {
+                          worker.execute { process(text) }
+                      }
+                  }
+              }
+
+              // ---------- think, speak, act ----------
+
+              private fun process(text: String) {
+                  try {
+                      MayaState.heard = text
+                      MayaState.mode = Mode.THINKING
+                      MayaState.status = "Soch rahi hoon..."
+                      val reply = Brain.ask(this, text)
+                      MayaState.reply = reply.speech
+                      MayaState.mode = Mode.SPEAKING
+                      MayaState.status = "Bol rahi hoon..."
+                      voice?.speak(reply.speech)
+                      val extra = Actions.run(this, reply)
+                      if (extra != null) {
+                          MayaState.reply = extra
+                          voice?.speak(extra)
+                      }
+                  } catch (e: Exception) {
+                      MayaState.status = "Error: " + e.message
+                  }
+                  main.post { finishTurn() }
+              }
+
+              private fun finishTurn() {
+                  try { recognizer?.destroy() } catch (e: Exception) { }
+                  recognizer = null
+                  busy = false
+                  MayaState.mode = Mode.IDLE
+                  if (alive) startWake()
+              }
+          }
+          MAYA_EOF_9
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/MayaState.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/MayaState.kt' <<'MAYA_EOF_10'
+          package com.ankit.maya
+
+          enum class Mode { IDLE, LISTENING, THINKING, SPEAKING }
+
+          object MayaState {
+              @Volatile var mode: Mode = Mode.IDLE
+              @Volatile var status: String = "Maya tayyar hai"
+              @Volatile var heard: String = ""
+              @Volatile var reply: String = ""
+              @Volatile var appVisible: Boolean = false
+          }
+          MAYA_EOF_10
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/OrbView.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/OrbView.kt' <<'MAYA_EOF_11'
+          package com.ankit.maya
+
+          import android.content.Context
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.RadialGradient
+          import android.graphics.RectF
+          import android.graphics.Shader
+          import android.graphics.Typeface
+          import android.view.View
+          import kotlin.math.cos
+          import kotlin.math.max
+          import kotlin.math.min
+          import kotlin.math.sin
+          import kotlin.math.sqrt
+
+          class OrbView(context: Context, private val showText: Boolean = true) : View(context) {
+
+              private val n = 360
+              private val ux = FloatArray(n)
+              private val uy = FloatArray(n)
+              private val uz = FloatArray(n)
+              private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val ring = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val txt = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val oval = RectF()
+              private val t0 = System.nanoTime()
+              private val d = context.resources.displayMetrics.density
+              private var smooth = 0f
+
+              init {
+                  ring.style = Paint.Style.STROKE
+                  txt.color = Color.WHITE
+                  txt.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                  txt.textAlign = Paint.Align.CENTER
+                  txt.letterSpacing = 0.18f
+                  val ga = Math.PI * (3.0 - sqrt(5.0))
+                  for (i in 0 until n) {
+                      val y = 1f - (i / (n - 1f)) * 2f
+                      val rad = sqrt(max(0f, 1f - y * y))
+                      val th = (ga * i).toFloat()
+                      ux[i] = cos(th) * rad
+                      uz[i] = sin(th) * rad
+                      uy[i] = y
+                  }
+              }
+
+              override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+                  val r = max(min(w, h) * 0.5f, 1f)
+                  glow.shader = RadialGradient(
+                      w / 2f, h / 2f, r,
+                      intArrayOf(Color.argb(150, 255, 150, 40), Color.argb(70, 40, 110, 255), Color.TRANSPARENT),
+                      floatArrayOf(0f, 0.55f, 1f),
+                      Shader.TileMode.CLAMP
+                  )
+              }
+
+              private fun drawRing(c: Canvas, cx: Float, cy: Float, rx: Float, ratio: Float, rot: Float, col: Int, sw: Float) {
+                  c.save()
+                  c.translate(cx, cy)
+                  c.rotate(rot)
+                  oval.set(-rx, -rx * ratio, rx, rx * ratio)
+                  ring.color = col
+                  ring.alpha = 70
+                  ring.strokeWidth = sw * 3f * d
+                  c.drawOval(oval, ring)
+                  ring.color = col
+                  ring.strokeWidth = sw * d
+                  c.drawOval(oval, ring)
+                  c.restore()
+              }
+
+              override fun onDraw(c: Canvas) {
+                  val w = width.toFloat()
+                  val h = height.toFloat()
+                  val cx = w / 2f
+                  val cy = h / 2f
+                  val r = min(w, h) * 0.27f
+                  val t = (System.nanoTime() - t0) / 1e9f
+                  val mode = MayaState.mode
+
+                  val target = when (mode) {
+                      Mode.LISTENING -> 1f
+                      Mode.SPEAKING -> 1.6f
+                      Mode.THINKING -> 0.7f
+                      else -> 0.25f
+                  }
+                  smooth += (target - smooth) * 0.06f
+                  val pulse = 1f + 0.05f * smooth * sin(t * (4f + 3f * smooth))
+                  val rr = r * pulse
+
+                  glow.alpha = (110 + 90 * min(smooth, 1.2f)).toInt().coerceIn(0, 255)
+                  c.drawCircle(cx, cy, min(w, h) * 0.5f, glow)
+
+                  val a = t * (0.35f + 0.5f * smooth)
+                  val ca = cos(a)
+                  val sa = sin(a)
+                  for (i in 0 until n) {
+                      val x = ux[i] * ca + uz[i] * sa
+                      val z = -ux[i] * sa + uz[i] * ca
+                      val depth = (z + 1f) / 2f
+                      val al = (50 + 205 * depth).toInt()
+                      dot.color = if (mode == Mode.LISTENING) {
+                          Color.argb(al, 90, 220, 255)
+                      } else {
+                          Color.argb(al, 255, 190 - (40 * depth).toInt(), 70)
+                      }
+                      c.drawCircle(cx + x * rr, cy + uy[i] * rr, (0.9f + 1.9f * depth) * d, dot)
+                  }
+
+                  drawRing(c, cx, cy, rr * 1.55f, 0.28f, 25f + t * 14f * (1f + smooth), Color.rgb(47, 123, 255), 2.4f)
+                  drawRing(c, cx, cy, rr * 1.50f, 0.42f, -35f - t * 10f * (1f + smooth), Color.rgb(255, 154, 60), 1.6f)
+                  drawRing(c, cx, cy, rr * 1.30f, 0.20f, 80f + t * 20f, Color.rgb(60, 160, 255), 1.8f)
+
+                  if (showText) {
+                      txt.textSize = r * 0.34f
+                      txt.setShadowLayer(18f * d, 0f, 0f, Color.argb(200, 255, 170, 60))
+                      c.drawText("MAYA", cx, cy + txt.textSize * 0.35f, txt)
+                  }
+                  postInvalidateOnAnimation()
+              }
+          }
+          MAYA_EOF_11
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/Prefs.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/Prefs.kt' <<'MAYA_EOF_12'
+          package com.ankit.maya
+
+          import android.content.Context
+
+          object Prefs {
+              private fun sp(c: Context) = c.getSharedPreferences("maya", Context.MODE_PRIVATE)
+
+              fun key(c: Context): String = (sp(c).getString("key", "") ?: "").replace("\\s".toRegex(), "")
+
+              fun setKey(c: Context, k: String) {
+                  sp(c).edit().putString("key", k.replace("\\s".toRegex(), "")).apply()
+              }
+
+              fun owner(c: Context): String = sp(c).getString("owner", "Ankit") ?: "Ankit"
+
+              fun setOwner(c: Context, n: String) {
+                  sp(c).edit().putString("owner", n.trim().ifEmpty { "Ankit" }).apply()
+              }
+
+              fun voice(c: Context): String = sp(c).getString("voice", "Leda") ?: "Leda"
+
+              fun setVoice(c: Context, v: String) {
+                  sp(c).edit().putString("voice", v).apply()
+              }
+          }
+          MAYA_EOF_12
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/SetupActivity.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/SetupActivity.kt' <<'MAYA_EOF_13'
+          package com.ankit.maya
+
+          import android.Manifest
+          import android.app.Activity
+          import android.app.admin.DevicePolicyManager
+          import android.content.ClipboardManager
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.net.Uri
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.os.PowerManager
+          import android.provider.Settings
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class SetupActivity : Activity() {
+
+              private lateinit var keyBox: EditText
+              private lateinit var nameBox: EditText
+              private lateinit var permState: TextView
+              private lateinit var overlayState: TextView
+              private lateinit var batteryState: TextView
+              private lateinit var adminState: TextView
+              private lateinit var voiceBtn: android.widget.Button
+              private var voice: Voice? = null
+              private val voices = arrayOf("Leda", "Aoede", "Achernar", "Sulafat", "Zephyr", "Kore", "Callirrhoe", "Laomedeia")
+
+              private val perms = arrayOf(
+                  Manifest.permission.RECORD_AUDIO,
+                  Manifest.permission.POST_NOTIFICATIONS,
+                  Manifest.permission.CALL_PHONE,
+                  Manifest.permission.SEND_SMS,
+                  Manifest.permission.READ_CONTACTS
+              )
+
+              private fun lp(): LinearLayout.LayoutParams {
+                  val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  p.topMargin = Ui.dp(this, 8)
+                  return p
+              }
+
+              private fun section(root: LinearLayout, title: String, desc: String): TextView {
+                  val card = LinearLayout(this)
+                  card.orientation = LinearLayout.VERTICAL
+                  card.background = Ui.round(Ui.CARD, Ui.dp(this, 16).toFloat())
+                  card.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12))
+                  card.addView(Ui.label(this, title, 16f, Color.WHITE, true))
+                  card.addView(Ui.label(this, desc, 12f, Ui.MUTED, false))
+                  val st = Ui.label(this, "", 13f, Ui.ORANGE, true)
+                  st.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4))
+                  card.addView(st)
+                  root.addView(card, lp())
+                  card.tag = st
+                  return st
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = Ui.BG
+                  window.navigationBarColor = Ui.BG
+                  voice = Voice(this)
+
+                  val sv = ScrollView(this)
+                  sv.setBackgroundColor(Ui.BG)
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setPadding(Ui.dp(this, 16), Ui.dp(this, 36), Ui.dp(this, 16), Ui.dp(this, 24))
+                  sv.addView(root)
+
+                  root.addView(Ui.label(this, "Maya Setup", 24f, Color.WHITE, true))
+                  root.addView(Ui.label(this, "Upar se neeche ek-ek karke karo.", 13f, Ui.MUTED, false))
+
+                  // 1. Gemini key
+                  val keySt = section(root, "1. Gemini key", "Maya ka dimaag aur awaaz. Key free hai. Paste karte waqt aage-peeche space nahi aayega.")
+                  val card1 = keySt.parent as LinearLayout
+                  keyBox = EditText(this)
+                  keyBox.hint = "AIza..."
+                  keyBox.setHintTextColor(Ui.MUTED)
+                  keyBox.setTextColor(Color.WHITE)
+                  keyBox.setSingleLine(true)
+                  keyBox.setText(Prefs.key(this))
+                  card1.addView(keyBox)
+                  val r1 = LinearLayout(this)
+                  r1.orientation = LinearLayout.HORIZONTAL
+                  r1.addView(Ui.button(this, "Free key lo", 0xFF22305A.toInt()) {
+                      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+                  })
+                  r1.addView(Ui.button(this, "Paste", 0xFF22305A.toInt()) {
+                      val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                      val t = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                      keyBox.setText(t.replace("\\s".toRegex(), ""))
+                  })
+                  r1.addView(Ui.button(this, "Save", Ui.BLUE) {
+                      Prefs.setKey(this, keyBox.text.toString())
+                      Prefs.setOwner(this, nameBox.text.toString())
+                      Toast.makeText(this, "Save ho gaya", Toast.LENGTH_SHORT).show()
+                      refresh()
+                  })
+                  card1.addView(r1)
+
+                  // 2. Name
+                  val nameSt = section(root, "2. Aapka naam", "Maya aapko isi naam se jaanegi aur kahegi ki isi ne use banaya.")
+                  val card2 = nameSt.parent as LinearLayout
+                  nameBox = EditText(this)
+                  nameBox.setTextColor(Color.WHITE)
+                  nameBox.setSingleLine(true)
+                  nameBox.setText(Prefs.owner(this))
+                  card2.addView(nameBox)
+
+                  // 3. Voice
+                  val voiceSt = section(root, "3. Maya ki awaaz", "Awaaz badal kar test karo, jo pasand aaye wahi rakho.")
+                  val card3 = voiceSt.parent as LinearLayout
+                  val r3 = LinearLayout(this)
+                  r3.orientation = LinearLayout.HORIZONTAL
+                  voiceBtn = Ui.button(this, "Awaaz: " + Prefs.voice(this), 0xFF22305A.toInt()) {
+                      val cur = voices.indexOf(Prefs.voice(this))
+                      val next = voices[(cur + 1) % voices.size]
+                      Prefs.setVoice(this, next)
+                      voiceBtn.text = "Awaaz: " + next
+                  }
+                  r3.addView(voiceBtn)
+                  r3.addView(Ui.button(this, "Test sunao", Ui.BLUE) {
+                      Prefs.setKey(this, keyBox.text.toString())
+                      val name = nameBox.text.toString().trim().ifEmpty { "Ankit" }
+                      Thread {
+                          try {
+                              voice?.speak("Namaste " + name + ", main Maya hoon. Aapki awaaz sunne ke liye tayyar hoon.")
+                          } catch (e: Exception) { }
+                      }.start()
+                  })
+                  card3.addView(r3)
+
+                  // 4. Permissions
+                  permState = section(root, "4. Permissions", "Mic, notification, call, SMS aur contacts.")
+                  (permState.parent as LinearLayout).addView(Ui.button(this, "Sab allow karo", Ui.BLUE) {
+                      requestPermissions(perms, 7)
+                  })
+
+                  // 5. Overlay
+                  overlayState = section(root, "5. Floating orb", "Dusre apps ke upar Maya ka chhota orb, aur background se app kholne ke liye zaroori.")
+                  (overlayState.parent as LinearLayout).addView(Ui.button(this, "Allow karo", Ui.BLUE) {
+                      startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))
+                  })
+
+                  // 6. Battery
+                  batteryState = section(root, "6. Battery", "Taaki phone Maya ko background mein band na kare. Allow dabao.")
+                  (batteryState.parent as LinearLayout).addView(Ui.button(this, "Allow karo", Ui.BLUE) {
+                      startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + packageName)))
+                  })
+
+                  // 7. Device admin
+                  adminState = section(root, "7. Phone lock", "Maya phone lock kar sake isliye Device Admin on karo.")
+                  (adminState.parent as LinearLayout).addView(Ui.button(this, "On karo", Ui.BLUE) {
+                      val i = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                      i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this, AdminReceiver::class.java))
+                      i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Maya ko phone lock karne ke liye.")
+                      startActivity(i)
+                  })
+
+                  val done = Ui.button(this, "Ho gaya, Maya shuru karo", Ui.BLUE) {
+                      Prefs.setKey(this, keyBox.text.toString())
+                      Prefs.setOwner(this, nameBox.text.toString())
+                      finish()
+                  }
+                  root.addView(done, lp())
+
+                  setContentView(sv)
+              }
+
+              private fun mark(t: TextView, ok: Boolean, okText: String, noText: String) {
+                  t.text = if (ok) okText else noText
+                  t.setTextColor(if (ok) Ui.GREEN else Ui.ORANGE)
+              }
+
+              private fun refresh() {
+                  val allPerms = perms.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                  val mic = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                  mark(permState, allPerms, "Ho gaya", if (mic) "Mic mil gaya, baaki abhi baaki hain" else "Abhi baaki hai")
+                  mark(overlayState, Settings.canDrawOverlays(this), "Ho gaya", "Abhi baaki hai")
+                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  mark(batteryState, pm.isIgnoringBatteryOptimizations(packageName), "Ho gaya", "Abhi baaki hai")
+                  val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                  mark(adminState, dpm.isAdminActive(ComponentName(this, AdminReceiver::class.java)), "Ho gaya", "Abhi baaki hai")
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  refresh()
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refresh()
+              }
+
+              override fun onDestroy() {
+                  voice?.shutdown()
+                  super.onDestroy()
+              }
+          }
+          MAYA_EOF_13
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/Ui.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/Ui.kt' <<'MAYA_EOF_14'
+          package com.ankit.maya
+
+          import android.content.Context
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.TextView
+
+          object Ui {
+              val BG: Int = 0xFF0A0F1E.toInt()
+              val CARD: Int = 0xFF161E36.toInt()
+              val BLUE: Int = 0xFF2F7BFF.toInt()
+              val ORANGE: Int = 0xFFFF9A3C.toInt()
+              val GREEN: Int = 0xFF3DDC84.toInt()
+              val MUTED: Int = 0xFF8D9BC0.toInt()
+
+              fun dp(c: Context, v: Int): Int = (v * c.resources.displayMetrics.density).toInt()
+
+              fun round(color: Int, radius: Float): GradientDrawable {
+                  val g = GradientDrawable()
+                  g.setColor(color)
+                  g.cornerRadius = radius
+                  return g
+              }
+
+              fun button(c: Context, text: String, color: Int, click: () -> Unit): Button {
+                  val b = Button(c)
+                  b.text = text
+                  b.isAllCaps = false
+                  b.setTextColor(Color.WHITE)
+                  b.textSize = 14f
+                  b.background = round(color, dp(c, 14).toFloat())
+                  b.setPadding(dp(c, 14), dp(c, 8), dp(c, 14), dp(c, 8))
+                  b.setOnClickListener { click() }
+                  return b
+              }
+
+              fun label(c: Context, text: String, size: Float, color: Int, bold: Boolean): TextView {
+                  val t = TextView(c)
+                  t.text = text
+                  t.textSize = size
+                  t.setTextColor(color)
+                  if (bold) t.setTypeface(t.typeface, android.graphics.Typeface.BOLD)
+                  t.gravity = Gravity.START
+                  return t
+              }
+          }
+          MAYA_EOF_14
+          mkdir -p "$(dirname 'app/src/main/java/com/ankit/maya/Voice.kt')"
+          cat > 'app/src/main/java/com/ankit/maya/Voice.kt' <<'MAYA_EOF_15'
+          package com.ankit.maya
+
+          import android.content.Context
+          import android.media.AudioAttributes
+          import android.media.AudioFormat
+          import android.media.AudioTrack
+          import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
+          import android.util.Base64
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.util.Locale
+          import java.util.concurrent.CountDownLatch
+          import java.util.concurrent.TimeUnit
+
+          class Voice(private val ctx: Context) {
+
+              private var tts: TextToSpeech? = null
+              @Volatile private var ttsReady = false
+              @Volatile private var blockedUntil = 0L
+              private val ttsModels = arrayOf("gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts")
+
+              init {
+                  tts = TextToSpeech(ctx.applicationContext) { status ->
+                      if (status == TextToSpeech.SUCCESS) {
+                          tts?.language = Locale("hi", "IN")
+                          tts?.setPitch(1.2f)
+                          ttsReady = true
+                      }
+                  }
+              }
+
+              /** Blocks until the sentence has been spoken. Call from a background thread. */
+              fun speak(text: String) {
+                  if (text.isBlank()) return
+                  val pcm = geminiTts(text)
+                  if (pcm != null) play(pcm) else fallback(text)
+              }
+
+              fun shutdown() {
+                  try { tts?.shutdown() } catch (e: Exception) { }
+              }
+
+              private fun geminiTts(text: String): ByteArray? {
+                  val key = Prefs.key(ctx)
+                  if (key.isEmpty()) return null
+                  if (System.currentTimeMillis() < blockedUntil) return null
+                  val body = JSONObject()
+                      .put(
+                          "contents",
+                          JSONArray().put(
+                              JSONObject().put(
+                                  "parts",
+                                  JSONArray().put(
+                                      JSONObject().put(
+                                          "text",
+                                          "Say this in a sweet, warm, affectionate young woman's voice, naturally, in Hinglish: " + text
+                                      )
+                                  )
+                              )
+                          )
+                      )
+                      .put(
+                          "generationConfig",
+                          JSONObject()
+                              .put("responseModalities", JSONArray().put("AUDIO"))
+                              .put(
+                                  "speechConfig",
+                                  JSONObject().put(
+                                      "voiceConfig",
+                                      JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", Prefs.voice(ctx)))
+                                  )
+                              )
+                      )
+                      .toString()
+                  for (m in ttsModels) {
+                      try {
+                          val (code, resp) = Net.post(
+                              "https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent", key, body
+                          )
+                          if (code == 200) {
+                              val parts = JSONObject(resp).getJSONArray("candidates").getJSONObject(0)
+                                  .getJSONObject("content").getJSONArray("parts")
+                              for (i in 0 until parts.length()) {
+                                  val p = parts.getJSONObject(i)
+                                  val inl = p.optJSONObject("inlineData") ?: p.optJSONObject("inline_data")
+                                  if (inl != null) {
+                                      return Base64.decode(inl.getString("data"), Base64.DEFAULT)
+                                  }
+                              }
+                          } else if (code == 429) {
+                              blockedUntil = System.currentTimeMillis() + 60000
+                              return null
+                          }
+                      } catch (e: Exception) {
+                          // try next model / fallback
+                      }
+                  }
+                  blockedUntil = System.currentTimeMillis() + 20000
+                  return null
+              }
+
+              private fun play(pcm: ByteArray) {
+                  val sr = 24000
+                  val at = AudioTrack.Builder()
+                      .setAudioAttributes(
+                          AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_MEDIA)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                              .build()
+                      )
+                      .setAudioFormat(
+                          AudioFormat.Builder()
+                              .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                              .setSampleRate(sr)
+                              .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                              .build()
+                      )
+                      .setBufferSizeInBytes(pcm.size)
+                      .setTransferMode(AudioTrack.MODE_STATIC)
+                      .build()
+                  at.write(pcm, 0, pcm.size)
+                  at.play()
+                  Thread.sleep(pcm.size / 2L * 1000L / sr + 250L)
+                  at.stop()
+                  at.release()
+              }
+
+              private fun fallback(text: String) {
+                  var waited = 0
+                  while (!ttsReady && waited < 20) {
+                      Thread.sleep(100)
+                      waited++
+                  }
+                  val t = tts ?: return
+                  if (!ttsReady) return
+                  val latch = CountDownLatch(1)
+                  t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                      override fun onStart(utteranceId: String?) {}
+                      override fun onDone(utteranceId: String?) { latch.countDown() }
+                      @Deprecated("Deprecated in Java")
+                      override fun onError(utteranceId: String?) { latch.countDown() }
+                  })
+                  t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "maya")
+                  latch.await(30, TimeUnit.SECONDS)
+              }
+          }
+          MAYA_EOF_15
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_bg.xml')"
+          cat > 'app/src/main/res/drawable/ic_bg.xml' <<'MAYA_EOF_16'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#FF0A0F1E" />
+          </shape>
+          MAYA_EOF_16
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_fg.xml')"
+          cat > 'app/src/main/res/drawable/ic_fg.xml' <<'MAYA_EOF_17'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#33FF9A2A"
+                  android:pathData="M54,54m-26,0a26,26 0 1,0 52,0a26,26 0 1,0 -52,0" />
+              <path
+                  android:fillColor="#FFFFB23E"
+                  android:pathData="M54,54m-16,0a16,16 0 1,0 32,0a16,16 0 1,0 -32,0" />
+              <path
+                  android:fillColor="#FFFFE2A8"
+                  android:pathData="M54,54m-8,0a8,8 0 1,0 16,0a8,8 0 1,0 -16,0" />
+              <group
+                  android:pivotX="54"
+                  android:pivotY="54"
+                  android:rotation="-28">
+                  <path
+                      android:fillColor="#00000000"
+                      android:pathData="M54,54m-32,0a32,12 0 1,0 64,0a32,12 0 1,0 -64,0"
+                      android:strokeColor="#FF2F7BFF"
+                      android:strokeWidth="2.5" />
+              </group>
+              <group
+                  android:pivotX="54"
+                  android:pivotY="54"
+                  android:rotation="38">
+                  <path
+                      android:fillColor="#00000000"
+                      android:pathData="M54,54m-30,0a30,10 0 1,0 60,0a30,10 0 1,0 -60,0"
+                      android:strokeColor="#FFFF9A3C"
+                      android:strokeWidth="2" />
+              </group>
+          </vector>
+          MAYA_EOF_17
+          mkdir -p "$(dirname 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml')"
+          cat > 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml' <<'MAYA_EOF_18'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_bg" />
+              <foreground android:drawable="@drawable/ic_fg" />
+          </adaptive-icon>
+          MAYA_EOF_18
+          mkdir -p "$(dirname 'app/src/main/res/values/themes.xml')"
+          cat > 'app/src/main/res/values/themes.xml' <<'MAYA_EOF_19'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar" />
+          </resources>
+          MAYA_EOF_19
+          mkdir -p "$(dirname 'app/src/main/res/xml/device_admin.xml')"
+          cat > 'app/src/main/res/xml/device_admin.xml' <<'MAYA_EOF_20'
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock />
+              </uses-policies>
+          </device-admin>
+          MAYA_EOF_20
+
+      - name: Download offline wake-word model
+        run: |
+          curl -L --fail -o model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q model.zip
+          mkdir -p app/src/main/assets
+          mv vosk-model-small-en-us-0.15 app/src/main/assets/model-en-us
+          rm model.zip
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk Maya.apk
+
+      - name: Publish APK in Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: maya-${{ github.run_number }}
+          name: Maya build ${{ github.run_number }}
+          files: Maya.apk
